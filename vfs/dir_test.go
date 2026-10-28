@@ -857,3 +857,35 @@ func TestDirMetadataExtension(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+// Moving a directory into another directory must not drop the entry of the
+// destination which has the same name as the moved directory used to have.
+func TestDirRenameKeepsDestinationSiblings(t *testing.T) {
+	r, vfs := newTestVFS(t)
+	features := r.Fremote.Features()
+	if features.DirMove == nil && features.Move == nil && features.Copy == nil {
+		t.Skip("can't rename directories")
+	}
+	ctx := context.Background()
+	a := r.WriteObject(ctx, "d1/s1/a", "a", t1)
+	b := r.WriteObject(ctx, "d2/s1/b", "bb", t1)
+	r.CheckRemoteItems(t, a, b)
+
+	root, err := vfs.Root()
+	require.NoError(t, err)
+	for _, p := range []string{"d1", "d2", "d1/s1", "d2/s1"} {
+		_, err := vfs.Stat(p)
+		require.NoError(t, err)
+	}
+	d1, err := vfs.Stat("d1")
+	require.NoError(t, err)
+	d2, err := vfs.Stat("d2")
+	require.NoError(t, err)
+	_ = root
+
+	require.NoError(t, d1.(*Dir).Rename("s1", "s4", d2.(*Dir)))
+	checkListing(t, d2.(*Dir), []string{"s1,0,true", "s4,0,true"})
+	checkListing(t, d1.(*Dir), nil)
+	a.Path = "d2/s4/a"
+	fstest.CheckListingWithPrecision(t, r.Fremote, []fstest.Item{a, b}, nil, r.Fremote.Precision())
+}

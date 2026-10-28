@@ -398,11 +398,17 @@ func (d *Dir) rename(newParent *Dir, fsDir fs.Directory) {
 	d.modTimeMu.Unlock()
 	d.mu.Lock()
 	oldPath := d.path
+	oldParent := d.parent
 	d.parent = newParent
 	d.entry = fsDir
 	d.path = fsDir.Remote()
 	newPath := d.path
-	delete(d.parent.items, name(oldPath))
+	if oldParent == newParent {
+		// A move into another directory is removed from the old parent by the
+		// caller. Deleting the old name from the new parent here would drop an
+		// unrelated entry of that name from the destination directory.
+		delete(d.parent.items, name(oldPath))
+	}
 	d.parent.items[name(d.path)] = d
 	d.read = time.Time{}
 	d.mu.Unlock()
