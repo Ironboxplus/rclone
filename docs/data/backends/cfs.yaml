@@ -1,0 +1,16 @@
+backend: cfs
+name: CFS
+tier: Tier 4
+maintainers: External
+features_score: 0
+integration_tests: N/A
+data_integrity: Other
+performance: Medium
+adoption: Some use
+docs: Basic
+security: High
+virtual: true
+remote: ''
+features: null
+hashes: null
+precision: null

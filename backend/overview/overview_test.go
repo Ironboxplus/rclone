@@ -69,3 +69,14 @@ func TestGetBackendConfigAll(t *testing.T) {
 		assert.NotNil(t, conf)
 	}
 }
+
+// The cfs backend lives in its own module (github.com/Ironboxplus/cfs) and
+// registers itself with fs.Register. fs.Register looks its overview up here and
+// logs "internal error: no overview data found" at every start when the file is
+// missing, so the file has to exist next to the other backends.
+func TestGetBackendConfigCFS(t *testing.T) {
+	conf, err := GetBackendConfig("cfs")
+	require.NoError(t, err)
+	assert.Equal(t, "cfs", conf.Backend)
+	assert.Equal(t, "CFS", conf.Name)
+}
