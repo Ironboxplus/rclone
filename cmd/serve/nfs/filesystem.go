@@ -3,6 +3,7 @@
 package nfs
 
 import (
+	"hash/fnv"
 	"os"
 	"path"
 	"strings"
@@ -15,6 +16,28 @@ import (
 	"github.com/rclone/rclone/vfs/vfscommon"
 	"github.com/willscott/go-nfs/file"
 )
+
+// fileID is the NFS fileid of the node at path, a path relative to the VFS root.
+//
+// It has to be non-zero and unique (mounting doesn't work on Linux without
+// one), and stable: the file handle of a path is md5(path) (see hashPath), so
+// the same handle must always carry the same fileid. node.Inode() does not do
+// that - it counts nodes in the order this process first saw them, so after a
+// restart a client that stays mounted gets another fileid for the handle it
+// holds. FreeBSD's client then fails the call with EIDRM ("Identifier
+// removed"): nfscl_loadattrcache in sys/fs/nfsclient/nfs_clport.c returns it
+// when a non-zero cached na_fileid differs from the new one of the same vnode
+// (releng/13.1, lines 496-500). The hash is fnv64 of the path like go-nfs
+// uses when a file has no fileid of its own; a rename changes handle and
+// fileid together.
+func fileID(path string) uint64 {
+	h := fnv.New64()
+	_, _ = h.Write([]byte(path))
+	if id := h.Sum64(); id != 0 {
+		return id
+	}
+	return 1
+}
 
 // setSys sets the Sys() call up for the vfs.Node passed in
 //
@@ -37,7 +60,7 @@ func setSys(fi os.FileInfo) {
 		Nlink:  1,
 		UID:    vfs.Opt.UID,
 		GID:    vfs.Opt.GID,
-		Fileid: node.Inode(), // without this mounting doesn't work on Linux
+		Fileid: fileID(node.Path()),
 	}
 	node.SetSys(&stat)
 }

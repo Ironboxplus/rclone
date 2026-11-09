@@ -16,6 +16,7 @@ import (
 	"github.com/rclone/rclone/vfs/vfscommon"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/willscott/go-nfs/file"
 )
 
 // Chmod/Chown arrive as plain SETATTR calls on the link path after a
@@ -97,4 +98,50 @@ func TestPathTraversal(t *testing.T) {
 		fstest.NewItem("outside-secret.txt", "SECRET", modTime),
 		fstest.NewItem("served-root/inside.txt", "INSIDE", modTime),
 	}, []string{"served-root"}, fs.GetModifyWindow(ctx, outside))
+}
+
+// The fileid of a path must be the same in a new process (a client that
+// stays mounted compares it with the one it has cached: FreeBSD fails the
+// call with EIDRM if it changed), differ between paths, and never be 0.
+func TestFileIDStableAcrossVFS(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(dir+"/d/sub", 0777))
+	for _, name := range []string{"d/a", "d/b", "d/sub/a", "top"} {
+		require.NoError(t, os.WriteFile(dir+"/"+name, []byte(name), 0666))
+	}
+	names := []string{"d", "d/a", "d/b", "d/sub", "d/sub/a", "top"}
+
+	ids := func(touchOrder []string) map[string]uint64 {
+		f, err := fs.NewFs(ctx, dir)
+		require.NoError(t, err)
+		opt := vfscommon.Opt
+		v := vfs.New(ctx, f, &opt)
+		defer v.Shutdown()
+		bfs := &FS{vfs: v}
+		out := map[string]uint64{}
+		for _, name := range touchOrder {
+			fi, err := bfs.Lstat(name)
+			require.NoError(t, err)
+			out[name] = fi.Sys().(*file.FileInfo).Fileid
+		}
+		return out
+	}
+	first := ids(names)
+	// Another process sees the nodes in another order (so another Inode()).
+	rev := make([]string, len(names))
+	for i, n := range names {
+		rev[len(names)-1-i] = n
+	}
+	second := ids(rev)
+	assert.Equal(t, first, second)
+
+	seen := map[uint64]string{}
+	for name, id := range first {
+		assert.NotZero(t, id, name)
+		other, dup := seen[id]
+		assert.False(t, dup, "%s and %s share fileid %d", name, other, id)
+		seen[id] = name
+	}
+	assert.NotZero(t, fileID(""))
 }
