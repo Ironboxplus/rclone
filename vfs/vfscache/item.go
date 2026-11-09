@@ -71,6 +71,8 @@ type Item struct {
 	beingReset      bool                     // cache cleaner is resetting the cache file, access not allowed
 	graceTimer      *time.Timer              // timer for delayed close after grace period
 	closing         chan struct{}            // non-nil while a grace-period close is tearing the handle down, closed when done
+	acctBytes       int64                    // bytes counted for this item in Cache.dirty
+	acctClosed      int64                    // bytes counted as closed for this item in Cache.dirty
 }
 
 // Info is persisted to backing store
@@ -236,6 +238,7 @@ func (item *Item) _truncate(size int64) (err error) {
 		// FIXME ignore unknown length files
 		return nil
 	}
+	defer item._acct()
 
 	// Use open handle if available
 	fd := item.fd
@@ -393,6 +396,7 @@ func (item *Item) _getSize() (size int64, err error) {
 	}
 	if err == nil {
 		item.info.Size = size
+		item._acct()
 	}
 	return size, err
 }
@@ -446,6 +450,7 @@ func (item *Item) _dirty() {
 			fs.Errorf(item.name, "vfs cache: failed to save item info: %v", err)
 		}
 	}
+	item._acct()
 }
 
 // Dirty marks the item as changed and needing writeback
@@ -524,6 +529,7 @@ func (item *Item) open(o fs.Object) (err error) {
 	// defer log.Trace(o, "item=%p", item)("err=%v", &err)
 	item.mu.Lock()
 	defer item.mu.Unlock()
+	defer item._acct()
 
 	// Wait for any in-progress grace-period close to finish so we start
 	// from a fully closed item rather than racing the fd teardown.
@@ -679,6 +685,7 @@ func (item *Item) _store(ctx context.Context, storeFn StoreFn) (err error) {
 
 	// Show item is clean and is eligible for cache removal
 	item.info.Dirty = false
+	item._acct()
 	err = item._save()
 	if err != nil {
 		fs.Errorf(item.name, "vfs cache: failed to write metadata file: %v", err)
@@ -706,6 +713,7 @@ func (item *Item) Close(storeFn StoreFn) (err error) {
 
 	item.info.ATime = time.Now()
 	item.opens--
+	item._acct() // a closed dirty item is queued for upload, writers may wait for it
 
 	if item.opens < 0 {
 		return os.ErrClosed
@@ -991,6 +999,7 @@ func (item *Item) _remove(reason string) (wasWriting bool) {
 	wasWriting = item.c.writeback.Remove(item.writeBackID)
 	item.mu.Lock()
 	item.info.clean()
+	item._acct()
 	item._removeFile(reason)
 	item._removeMeta(reason)
 	return wasWriting
@@ -1436,7 +1445,20 @@ func (item *Item) WriteAt(b []byte, off int64) (n int, err error) {
 		item.mu.Unlock()
 		return 0, errors.New("vfs cache item WriteAt: internal error: didn't Open file")
 	}
+	var grow int64
+	limited := item.c.opt.CacheMaxDirty > 0
+	if limited {
+		grow, err = item._dirtyGrowth(off, int64(len(b)))
+		if err != nil {
+			item.mu.Unlock()
+			return 0, err
+		}
+	}
 	item.mu.Unlock()
+	if limited {
+		// wait for uploads with Item.mu unlocked
+		item.c.waitDirty(grow)
+	}
 	// Do the writing with Item.mu unlocked
 	n, err = item.fd.WriteAt(b, off)
 	if err == nil && n != len(b) {
@@ -1459,6 +1481,7 @@ func (item *Item) WriteAt(b []byte, off int64) (n int, err error) {
 	if end > item.info.Size {
 		item.info.Size = end
 	}
+	item._acct()
 	item.mu.Unlock()
 	return n, err
 }

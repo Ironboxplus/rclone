@@ -115,6 +115,16 @@ first. rclone will start with files that haven't been accessed for the
 longest. This cache flushing strategy is efficient and more relevant
 files are likely to remain cached.
 
+Files which are not uploaded yet can't be evicted, so when they are
+written faster than they are uploaded the cache grows without bound.
+`--vfs-cache-max-dirty` limits the total size of these files: a write
+which would go over the limit waits until the uploads of files which
+are closed have made room, so writes slow down to the speed of the
+uploads. A file bigger than the limit can't be written, the write
+fails with "no space left on device". Files which are still open are
+never waited for (nothing could lower the total), so use a disk quota
+as the hard limit. It is off by default.
+
 The `--vfs-cache-max-age` will evict files from the cache
 after the set time since last access has passed; it is based on access time,
 not on when the file was first added to the cache. The default value of

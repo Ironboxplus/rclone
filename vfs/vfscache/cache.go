@@ -62,6 +62,7 @@ type Cache struct {
 	cleanerKicked bool             // some thread kicked the cleaner upon out of space
 	kickerMu      sync.Mutex       // mutex for cleanerKicked
 	kick          chan struct{}    // channel for kicking clear to start
+	dirty         dirtyAcct        // size of the items not uploaded yet, has its own lock
 
 }
 
@@ -131,6 +132,8 @@ func New(ctx context.Context, fremote fs.Fs, opt *vfscommon.Options, avFn AddVir
 		writeback:  writeback.New(ctx, opt),
 		avFn:       avFn,
 	}
+
+	c.dirty.init(ctx)
 
 	// load in the cache and metadata off disk
 	err = c.reload(ctx)
